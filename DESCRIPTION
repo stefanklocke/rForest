@@ -1,0 +1,18 @@
+Package: rForest
+Type: Package
+Title: Classification Trees and Random Forests
+Version: 0.1.0
+Author: Stefan Klocke
+Maintainer: <stefan.klocke@t-online.de>
+Description: This package provides a custom version of the CART algorithm,
+  extended to functionalities for bootstrap aggregating (Bagging) classification
+  trees and constructring Random Forests.
+License: GPL
+Imports: stats
+Encoding: UTF-8
+LazyData: true
+RoxygenNote: 6.0.1
+Suggests: knitr, rmarkdown
+VignetteBuilder: knitr
+NeedsCompilation: no
+Packaged: 2018-04-23 11:52:16 UTC; Stefan

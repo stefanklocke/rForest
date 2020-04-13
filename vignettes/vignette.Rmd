@@ -1,0 +1,608 @@
+---
+title: |
+  | rForest: A Basic Implementation of the
+  | CART an Random Forest Algorithm
+author: "Stefan Klocke (matriculation number: 4836825)"
+date: "`r Sys.Date()`"
+header-includes:
+  - \usepackage{enumerate}
+output:
+  pdf_document:
+    toc: true
+    toc_depth: 2
+    number_sections: true
+number_sections: true
+bibliography: references.bib
+csl: taylor-and-francis-harvard-x.csl
+vignette: >
+  %\VignetteIndexEntry{rForest Vignette}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+\newpage
+# Introduction
+The package `rForest` introduces tree-based methods as tools for analyzing
+high dimensional classification problems. In particular, the package provides a
+basic implementation of the classification and regression trees (CART) algorithm
+(where as of now, the emphasis here is put on categorial response variables,
+i.e. on classification problems). In combination with bootstrap resampling,
+the algorithm's functionality will be extended by *Bagging* to support the
+construction of tree ensembles or *bagged trees*, of which the *Random Forest*
+algorithm is introduced as a special case.
+
+# Theoretical Framework
+Before turning to the implementation of the three algorithms, it is this
+section's purpose to discuss the theoretical underpinnings on which this package
+was built.
+
+## Classification and Regression Trees: CART Algorithm
+With their book, @breiman1984 introduced the classification and regression trees
+algorithm as a new approach to assessing the explanatory relationship between
+response and predictor variables.
+
+### Binary Splitting {-}
+Unlike e.g. regression analysis, the CART algorithm's key approach is to
+stratify some predictor space (i.e. the space spanned by a set of predictors
+and their respective values) into a number of smaller and more homogeneous
+regions by employing binary splits (see @james2013[pp. 303]).
+
+In this sense, binary splitting means that a predictor variable and value will
+be chosen to partition data into two subsets. The goals is to achieve a binary
+split that results in the highest possible degree of intra-subset homogeneity
+(respectively, inter-subset heterogeneity) with respect to the data's response
+values.
+
+The homogeneity of observations or *node purity* can be assessed using the Gini
+index, which attains high values for heterogeneous data:
+$$gini_m = 1 - \sum_{i=1}^K \hat{p}_{mk}^2$$
+where $\hat{p}_{mk}$ is the probability (relative frequency) of variable $m$'s
+class or value $k$. The goodness of a split is then calculated by the
+*information gain* as the weighted reduction of the Gini from splitting the
+dataset. To find the best split, the algorithm calculates the information gain
+for all values of all predictors and returns the predictor and value with the
+highest gain as the best possible spplit rule.
+
+### Recursive Partitioning {-}
+The main rationale behind CART is to repeatedly use binary splits in order to
+successively obtain smaller subsets that increase in purity. In this manner, a
+splitting rule is derived for every (sub)set of observations, further splitting
+the data into two subsets. This process will then be recursively applied to both
+subsets, ultimately resulting in a sequence of binary splits.
+
+The result of this process, following @breiman1984, is referred to as a
+classification tree. The starting point of a tree is referred to as the `root`,
+split points within the tree are called `node`s, while endpoints are `leaf`s.
+Both, `leaf`s and the `root` are special cases of `node`s.
+
+In extreme cases, this process continues until each leaf contains only one
+observation (i.e. a perfectly pure subset). This, however, should not be the aim
+of tree construction, since the resulting classification model would be highly
+susceptible to overfitting (see @james2013[pp. 312]). Therefore some stopping
+criteria need to be defined in order to constrain the tree growing process at
+the cost of some impurities in the leafs (see also @kuhn2013[pp. 372]).
+
+### Greediness {-}
+Following @james2013[p. 306], a special property of the CART algorithm is that
+of *greediness*. At every node, the algorithm always chooses the split rule that
+increases node purity the most at this point in the process, rather than lookin
+forward aiming at the predictive accuracy of the overall tree. Since this can be
+problematic if some particularly strong predictors are used, greediness will be
+addressed with the introduction of *Random Forests*.
+
+## Bootstrap Aggregating: Bagging Algorithm
+As pointed out by @james2013[pp. 315], classification trees can be very
+non-robust to changes in data. That is, slight changes in the data may result
+in significant changes in tree structure. Therefore, classification trees may be
+susceptible to high variance and, therefore low predictive power when built on
+different data.
+
+### Bootstrap Resampling {-}
+An approach for tackling this issue was developed by @breiman1996, who
+introduced the concept of bootstrap aggregating or *Bagging*. The idea behind
+this approach is to randomly draw $b$ bootstrap samples *with replacement* from
+some original training dataset and then to construct one individual
+classification tree per sample. Tree variance can then be accounted for by
+deriving an aggregate prediction over all trees.
+
+### Out-of-Bag (OOB) Estimation {-}
+Since resampling is performed with replacement, some observations will happen to
+enter a bootstrap sample multiple times, while other observation may not be
+drawn at all. These observations are referred to as *out-of-bag* (OOB)
+observations. Since these observations will not be used for tree construction,
+they are not correlated with the constructed trees and can, therefore, be used
+for *out-of-bag estimation* (see @james2013[pp. 317]). Even though this is a key
+concept to Bagging, it goes beyond the constraints of this project. As for now,
+this version of `rForest` only supports the use of separate testing datasets.
+
+### Tree Aggregation {-}
+Now given an *ensemble* of $b$ clasification trees, the simplest approach to
+obtaining a prediction (as in @james2013[p. 317]) is to use a majority vote or
+*mode* over the predictions of all trees in the ensemble. The *mode* will then
+be used as an aggregate prediction.
+
+This approach, however, may not always be capable of addressing issues arising
+from the greediness of the CART algorithm. Under the presence of some
+particularly strong predictors, greediness may actually cause trees to be
+correlated, having a similar structure and yielding similar predictions.
+
+## Random Forest Algorithm
+The problem with strong predictors is that they will be chosen by the CART
+algorithm mostly in early stages of the recursive partitioning process
+(greediness), therefore somewhat mitigating the relative importance of other
+predictors in early split stages, causing correlation between bagged trees.
+
+As an extension to the Bagging approach, @breiman2001 introduced a concept for
+decorrelating bagged trees, referred to as *Random Forests*. The rationale
+behind this approach is to allow only a random subset of $m \leq p$ predictors
+to be used for binary splitting - As a rule of thumb, @breiman2001 suggests
+$m = \sqrt{p}$. At each stage of the partitioning process, a *new random subset*
+of predictors will be used. In this manner, it is possible that at some split
+points, particularly strong predictors may randomly drop out of consideration,
+in turn promoting the relative importance of those (less strong) predictors that
+remained in consideration.
+
+# Implementation in `R`
+This section provids details on the implementation of the introduced concepts
+in `R`. The implemented functions are introduced in order of their usage within
+the three algorithms. The `iris` dataset with its response variable `Species`
+will be used for demonstration.
+```{r}
+library(rForest)
+
+# Data import and sample split
+data(iris)
+data <- iris
+set.seed(1337)
+rows <- sample.int(nrow(data), size = floor(0.7*nrow(data)), replace = FALSE)
+trainData <- data[rows,]
+testData <- data[-rows,]
+```
+
+## gini
+As a starting point, a node purity index is needed to evaluate results from the
+splitting mechanism introduced soon. The function `gini()` calculates the purity
+for a given variable (which in our case is the response variable `Species`):
+```{r gini}
+purity <- gini(trainData, "Species")
+purity
+```
+
+## setSplit
+In order to support both, numerical and categorial predictor variables, the
+function `setSplit()` evaluates the class of a split variable `splitVar` before
+partitioning the data. If `splitVar` is numeric, observations with values
+smaller than `splitVal` will be assigned to the `left` group, else `right`. For
+categorial variables, observations with values other than `splitVal` will be
+assigned `left`.
+```{r setSplit}
+# categorial
+groups <- setSplit(trainData, "Species", "setosa")
+unique(groups$left$Species)
+unique(groups$right$Species)
+# numeric
+groups <- setSplit(trainData, "Sepal.Width", 3.1)
+max(groups$left$Sepal.Width)
+min(groups$right$Sepal.Width)
+```
+
+## gain
+Given some binary split and the pre-split Gini value, the function `gain()` is
+then used to calculate the *information gain* as the weighted Gini-reduction
+(or weighted increase in purity) from a binary split. The desirability of a
+split increases with its information gain.
+```{r gain}
+gain(groups$left, groups$right, "Species", purity)
+```
+
+## rule
+The search for the best possible split is implemented in the function `rule()`,
+which is passed some `data`, a `response` variable name and a list of variable
+names used as `predictors`. The variable and value along with the resulting gain
+are returned in a list:
+```{r rule}
+# Use all variables other than "Species" as predictors
+response <- "Species"
+predictors <- setdiff(colnames(iris), "Species")
+bestRule <- rule(trainData, response, predictors)
+bestRule
+```
+Given the set of `predictors`, the function loops over all predictor variables.
+For each predictor, the variable's unique values (or factor levels) will be
+stored in a vector. For each value, a second loop (within the first one) splits
+`data` and calculates the resulting information gain. The pair of predictor
+variable and value with the highest gain is returned as the best possible split
+rule for `data`. Internally, the list containing the rule is carried through the
+loops and updated every time a better rule is found.
+
+## setNode and setLeaf
+Before being able to finally implement the tree growing process, constructors
+for the creation of `node` and `leaf` objects are needed. In the recursive
+growing process, a `node` is set whenever a further binary split of the current
+(sub)set is possible. If, instead, no further splits are possible, a `leaf` will
+be created. Whether further splits are possible is evaluated using stopping
+criteria, which will be introduced along with implemention of recursive tree
+growing later.
+
+The function `setNode()` is the constructor for `node` objects:
+```{r setNodeExec}
+# Create a new split using best possible split rule from above
+groups <- setSplit(trainData, bestRule$var, bestRule$val)
+node <- setNode(bestRule, groups$left, groups$right, "Species")
+str(node)
+```
+Note that in a final tree, `node` objects do not actually contain raw data
+inside their `left` and `right` elements. Instead, as the recursive tree
+construction process proceeds, either a `node` or a `leaf` object is created
+inside `left` and `right`. `leaf` objects however do indeed contain subsets of
+the original dataset.
+
+To set a `leaf` object, the constructor `setLeaf()` is called. Suppose for the
+`node` object created above, no further splits (in both, `left` and `right`
+groups) were possible. Then both elements would be set as `leaf`s:
+```{r setLeafExec}
+node$left <- setLeaf(node$left, response)
+node$right <- setLeaf(node$right, response)
+# Look at node's structure again
+str(node)
+```
+A `leaf` is an endpoint of a tree, carrying a subset of observations from the
+original dataset. From these observations, the mode (see `?getMode`) of response
+classes is used as a prediction value. A prediction error is included as the
+relative number of observations with response values other than the predicted
+class.
+
+Different to popular implementations of the CART algorithms such as the `rpart`
+package, `leaf` objects actually contain observations from the original dataset.
+This, of course, can be extremely inefficient in terms of memory usage,
+especially for large datasets. This property will be addressed in the final
+section
+
+## grow (internal within tree)
+Now, the core function of the CART implementation can be introduced. Provided a
+`group` of observations, `grow()` retrieves the best split `rule()` and performs
+a binary split. Given the binary split result, `grow()` is called recursively on
+both `left` and `right` groups. The results of both recursive calls will be
+combined to a `node` object afterwards (*post-order* traversal, see @morris1979)
+. Note that `grow()` is defined locally within the `tree()` constructor.
+```{r grow}
+# Function definition within tree()
+grow <- function(group, depth = 0) {
+  if(nrow(group) < minsplit) {
+    setLeaf(group, response, depth)
+  }
+  # Get best binary split rule
+  rule <- rule(group, response, predictors)
+  # Do not split, if split does not yield info. gain or maxdepth reached
+  if(rule$gain == 0 || depth > maxdepth) {
+    setLeaf(group, response, depth)
+  } else {
+    split <- setSplit(group, rule$var, rule$val)
+    # Do not split, if not too few obs. or if resulting leafs/nodes too small
+    if(nrow(split$left) < minbucket || nrow(split$right) < minbucket) {
+      setLeaf(group, response, depth)
+    } else {
+      # Recursively process left/right groups resulting from previous split
+      left <- grow(split$left, depth = depth + 1)
+      right <- grow(split$right, depth = depth + 1)
+      # Combine subtrees into node
+      setNode(rule, left, right, response, depth = depth)
+    }
+  }
+}
+```
+
+A recursion (not necessarily the entire process) terminates conditional on the
+following stopping criteria:
+\begin{enumerate}
+  \item Current `group` of observations does not contain enough observations
+  (less than specified in `minsplit`).
+  \item Next binary split does not yield information gain.
+  \item Maximum number of levels `maxdepth` is reached.
+  \item At least one group from next split does not contain enough observations
+  (less than specified in `minbucket`).
+\end{enumerate}
+If one of these criteria is met, the current recursion ends with a `leaf` being
+created. If none of the criteria is met, a `node` will be created and recursion
+proceeds.
+
+Even though `grow()` is defined locally within `tree()`, a function call outside
+of `tree()` can be demonstrated if some of `tree()`'s arguments are defined
+manually on `.GlobalEnv`:
+```{r growExec}
+# Manually define some option parameters of tree()
+minsplit <- 15
+minbucket <- 5
+# Only grow 2 levels so vignette is not overloaded with output
+maxdepth <- 2
+  
+# Grow tree, show its structure
+irisTree <- list(root = grow(trainData))
+str(irisTree)
+```
+
+## traverse.node
+Provided a complete tree structure, the concept of recursive *pre-order*
+traversal (see @morris1979) can be used to extract e.g. split information from
+leafs and nodes. This is implemented in `traverse.node()`:
+```{r traverse.nodeExec}
+# The argument 'ans' is never passed to manual function calls (recursives only)
+traverse(irisTree$root)
+```
+Each recursion of `traverse.node()` is passed a data.frame `ans` of previously
+collected split rules such that at the end of a recursion, a data.frame of split
+rules for all nodes is returned (or passed to the next recursive call). The
+function will later be used to generate variable importance rankings using
+`importance.tree()`.
+
+## tree
+While all tools for growing a tree are already in place, the `tree()`
+constructor can now be implemented. The function is passed a `formula` to
+describe the explainatory relationship between `data`'s variables. A period can
+be specified in order to use all predictors.
+
+`m` specifies the size of a random predictor subset as discussed in section 2.
+The functionality for random predictor subsets is already included here, so the
+function `forest()` (introduced later) can make use of `tree()`. The classical
+CART approach, however, uses the full set of predictors `m = p`.
+
+For the sake of comparability between packages, the argument names `minsplit`, 
+`minbucket` and `maxdepth` (as well as their defaults) are adapted from the
+`rpart` package. They are used for control structures and as stopping criteria
+(see above) to control for overfitting.
+
+Since `grow()` is defined within `tree()`, `grow()` can access the above
+described option parameters from `tree()`'s environment (so they do not have
+to be passed to `grow()` again). Finally, the function assembles a `tree` object
+as a list contraining the tree, information on variables and their importances
+(using `importance.tree()`) as well as on control parameters (see `?tree` for
+details).
+```{r treeExec}
+# Generate a fitted tree model using all 4 predictors
+fit <- tree(Species ~ .,
+            data = trainData,
+            m = 4,
+            minsplit = 15,
+            minbucket = 5,
+            maxdepth = 10)
+```
+
+## importance.tree
+The variable importance ranking included in a `tree` object is generated by the
+`importance.tree()` function. It uses `traverse.node()` to extract split rules
+from all nodes and then aggregates the data.frame (of split rules) returned.
+Similar to @james2013[p. 319], aggregation is performed by calculating the mean
+information gain relative to the predictor with the highest mean information
+gain.
+```{r importance.treeExec}
+importance(fit, predictors)
+```
+A vector with variable names as `predictors` is passed: If some predictors were
+not used for splitting, these predictors will be added to the data.frame with
+`relMeanGain` being set `NA`.
+
+## parenthesize.table
+Auxiliary function for printing (see `?parenthesize.table`). Omitted to save
+space.
+
+## print.leaf
+Given a complete tree structure, we are now interested in visualizing it.
+Starting from bottom to top, leafs are printed using the generic `print.leaf()`:
+```{r print.leafExec}
+# root's left branch leads to a leaf
+class(fit$root$left)
+fit$root$left
+```
+
+## print.node
+Printing `node` objects is more complicated, since it requires printing all
+contained subtrees down to the `leaf`s. For this purpose, pre-order traversal is
+used again, since left child `node`s and left `leaf`s are needed to be processed
+first. This recursive traversal is implemented in `print.node()`, which can be
+used to print either entire trees or only subtrees. If a `leaf` is visited, the
+current recursion stops and `print.leaf()` is called. Otherwise the function is
+recursively called first for the `left` and then for the `right` child:
+```{r print.nodeExec}
+# root's right branch leads to another node
+class(fit$root$right)
+fit$root$right
+```
+
+## print.tree
+Since the printing entire trees is already accomplished by `print.node()`, this
+function will only be wrapped by `print.tree()`, adding some additional
+information on the root's response class frequencies:
+```{r print.treeExec}
+fit
+```
+
+## singlePred (internal within predict.tree)
+Before being able to predict an entire dataset, a function needs to be
+implemented that handles the prediction of a single observation. The recursive
+function `singlePred()` defined within the generic `predict.tree()` passes an
+observation down a tree structure, recursively calling the function when a node
+is visited. Recursion stops once a leaf is reached, returning the `leaf`'s
+`prediction` element.
+```{r singlePred}
+# Recursive tree walk to generate single prediction
+singlePred <- function(object, data) {
+  # Stop recursion if leaf is reached
+  if(class(object) == "leaf") {
+    object$prediction
+  } else {
+    splitVar <- object$rule$var
+    splitVal <- object$rule$val
+    # Construct dynamic relation string for numeric/categorial split cases
+    if(object$rule$type == "numeric") {
+      rel <- paste(data[[splitVar]],
+                   "<",
+                   splitVal, sep = "")
+    } else {
+      rel <- paste("\"", data[[splitVar]], "\"",
+                   "!=",
+                   "\"", splitVal, "\"", sep = "")
+    }
+    # Turn the character 'rel' into an expression and evaluate it: Return Bool
+    isLeft <- eval(parse(text = rel))
+    # Recursively walk through tree until leaf is reached
+    if(isLeft) {
+      singlePred(object$left, data)
+    } else {
+      singlePred(object$right, data)
+    }
+  }
+}
+```
+
+The below chunk shows the classifcation of some observation from `testData`.
+```{r singlePredExec}
+singlePred(fit$root, testData[42,])
+```
+
+## predict.tree
+The functionality of `singlePred()` can then be extended to support entire
+datasets by looping over it, calling `singlePred()` for every observation and
+finally returning an atomic/factor vector of predictions. The generic
+`predict.tree()` does exactly this:
+```{r predict.treeExec}
+predict(fit, testData)
+```
+
+## summary.tree
+Provided functionaly for prediction, the key properties of a `tree` object can
+be summarized by `summary.tree()`. This function has an optional argument to
+pass a `test` dataset, printing additional prediction summaries:
+```{r summary.treeExec}
+summary(fit, testData)
+```
+
+## bootstrap
+Before being able to construct forests, a function for generating multiple
+training samples is needed. The function `bootstrap()` implements simple
+functionality for random sampling *with replacement*. The below code chunk
+demonstrates the creation of 5 bootstrap samples:
+```{r bootstrapExec}
+set.seed(1337)
+for(i in 1:5) {
+  bs <- bootstrap(trainData)
+  tbl <- table(bs$Species)
+  if(i == 1) cat("Class distribution of",parenthesize(tbl, type = "names"),"\n")
+  cat(parenthesize(tbl, type = "counts"), "\n", sep = "")
+}
+```
+
+## forest
+Being able to generate multipe training samples, the constructor `forest()`
+extends the function `tree()` to the creation of *bagged tree ensembles* or
+*Random Forests* (for $m < p$). For a specified number of `b` bootstrap samples,
+the function uses a loop to iteratively resample `data`. Subsequent to
+resampling, a `tree` is generated using the current bootstrap sample. The trees
+generated in the loop are stored in the list element `ensemble`.
+```{r forestExec}
+# Create Random Forest with m = 3 < 4 = p
+set.seed(1337)
+start <- Sys.time()
+forestFit <- forest(Species ~ .,
+                    data = trainData,
+                    m = 3,
+                    b = 500,
+                    minsplit = 15,
+                    minbucket = 5,
+                    maxdepth = 10,
+                    bsinclude = FALSE)
+end <- Sys.time()
+end - start
+```
+
+In order to show the effect of bootstrap resampling on the structural variation
+of trees, the below chunk prints some trees included in the `ensemble`:
+```{r}
+forestFit$ensemble[[1]]
+forestFit$ensemble[[2]]
+```
+Obsiously, the changes in the data caused by resampling had some significant
+effects on the tree structure.
+
+## predict.forest
+To assess the predictive performance of the generated `forest` object, the
+function `predict.forest()` provides two types of predictions. Depending on the
+`type` argument passed, the function can either return an atomic/factor
+prediction vector containing the modal prediction over all trees (`type = aggr`)
+. For `type = prob`, the relative prediction probabilities for each response
+class are returned as a matrix. Internally, the function loops over all trees
+inside the `ensemble` and stores their predictions inside a data.frame. The
+data.frame is then aggregated according to the `type` argument specified.
+```{r predict.ensembleExec}
+# Aggregate/modal prediction
+predMode <- predict(forestFit, testData, type = "aggr")
+predMode
+# Prediction probabilites
+predProbs <- predict(forestFit, testData, type = "prob")
+predProbs
+```
+
+While the first prediction type is easy to interpret, prediction probabilites
+should never be neglected as they provide information on a prediction's
+reliability. Take e.g. the following two observations:
+```{r}
+# High variance prediction
+predProbs[20,]
+# Low variance prediction
+predProbs[23,]
+```
+
+## importance.forest
+Almost analogous to `importance.tree()`, variable importance rankings can be
+generated for tree ensembles using `importance.forest()`. In a first step,
+importance rankings for all trees are gathered inside a single data.frame using
+a loop. Then, again as in `importance.tree()`, all rows of this data.frame will
+be aggregated as relative mean gain. The below chunk compares importance
+rankings between the single CART tree `fit` and the random forest `forestFit`:
+```{r}
+# Single Tree
+importance(fit, predictors)
+# Random Forest
+importance(forestFit, predictors)
+```
+As apparent, relative variable importance has changed dramatically for all
+predictors. For a single tree, `Sepal.Length` and `Sepal.Width` were not used at
+all and `Petal.Width` was roughly 50\% as important as `Petal.Length`. With
+`b = 500` trees, instead, the latter two variables lie almost equal in
+importance, while `Sepal.Width` and `Sepal.Length` attain relative importance
+of about 50\% and 25\%, respectively.
+
+## print.forest
+After creating a `forest` object, some basic information can be displayed using
+its generic `print.forest()` function. Unlike `print.tree()`, only textual
+information will be displayed, since printing the structures of every tree in
+the ensemble will be rather confusing and hardly interpretable:
+```{r print.forestExec}
+print(forestFit)
+```
+
+## summary.forest
+To provide a more detailed overview of the previously presented contents of a
+`forest` object, `summary.forest()` concludes the model properties similar
+summary function for `tree`. Again, prediction is conducted optionally:
+```{r summary.forestExec}
+summary(forestFit, testData)
+```
+
+# Discussion
+Even for small datasets with a limited number of predictors, the use of Bagging
+or Random Forests seems to already be capable of changing conclusions drawn on
+the importance of some predictors.
+
+For datasets large in both, number of observations and predictors, however, the
+presented implementation of the three algorithms may be expected to be rather
+inefficient. For instance, the storage of data inside `tree`/`forest` objects is
+to memory intensive for large datasets, especially when `forest()` is used with
+a high number of bootstraps. A solution to this would be to create a
+"dictionary" storing observation-rownames from the original dataset and leaf-IDs
+to which the observations will be assigned during tree construction.
+
+In terms of extended functionaliy, possible package extensions could be
+regression trees, additional purity indices like e.g. cross-entropy, functions
+for plotting trees, ROC curves (predictive performance measurement) and added
+support for OOB estimation.
+
+# References
